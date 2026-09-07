@@ -49,7 +49,6 @@ python3 scan_organizer.py        # 창 실행
 |---|---|
 | `docs/superpowers/specs/2026-09-07-scan-organizer-design.md` | 설계서 — 무엇을 왜 이렇게 만드는가 |
 | `docs/superpowers/plans/2026-09-07-scan-organizer.md` | 구현 계획 — 검수 항목 T-01~T-09 포함 |
-| `/Users/cheonjamin/Downloads/스캔결의서_자동정리_개발제안서_v1.md` | 원본 제안서 (참고용, 범위가 크게 줄었음) |
 
 ---
 
