@@ -6,6 +6,8 @@ import configparser
 import re
 from pathlib import Path
 
+from pypdf import PdfReader
+
 # config.ini가 없을 때 사용하는 내장 기본값.
 # 일련번호는 7자리 또는 4자리 두 가지만 존재한다.
 # 7자리를 먼저 시도해야 한다. 순서가 반대면 "0000005"에서 앞 4자리만 잘린다.
@@ -58,3 +60,24 @@ def extract_number(text: str, patterns: list[re.Pattern]) -> str | None:
         if m:
             return m.group(1)
     return None
+
+
+class PdfReadError(Exception):
+    """PDF를 읽을 수 없을 때 (손상·암호화·파일 없음 등)."""
+
+
+def read_first_page(path: Path) -> str:
+    """PDF의 첫 페이지 텍스트만 읽는다.
+
+    전체 페이지를 로드하지 않으므로 100페이지 문서도 1페이지 문서와
+    같은 속도로 처리된다. 읽기에 실패하면 PdfReadError를 올린다.
+    """
+    try:
+        reader = PdfReader(str(path))
+        if not reader.pages:
+            return ""
+        return reader.pages[0].extract_text() or ""
+    except PdfReadError:
+        raise
+    except Exception as e:
+        raise PdfReadError(f"{type(e).__name__}: {e}") from e

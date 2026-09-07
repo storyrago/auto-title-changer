@@ -1,6 +1,15 @@
 """scan_organizer 추출 로직 검증. 실행: python test_scan_organizer.py"""
 
-from scan_organizer import normalize, extract_number, load_patterns
+import tempfile
+from pathlib import Path
+
+from scan_organizer import (
+    PdfReadError,
+    extract_number,
+    load_patterns,
+    normalize,
+    read_first_page,
+)
 
 P = load_patterns()  # config.ini 없으면 내장 기본값
 
@@ -45,6 +54,24 @@ def test_빈_문자열():
 
 def test_normalize_공백_압축():
     assert normalize("가  나\n\n다\t라") == "가 나 다 라"
+
+
+def test_손상된_pdf는_예외():
+    임시 = Path(tempfile.mkdtemp()) / "깨진.pdf"
+    임시.write_bytes("이건 PDF가 아닙니다".encode())
+    try:
+        read_first_page(임시)
+        raise AssertionError("PdfReadError가 발생해야 한다")
+    except PdfReadError:
+        pass
+
+
+def test_없는_파일은_예외():
+    try:
+        read_first_page(Path("/존재하지/않는/경로.pdf"))
+        raise AssertionError("PdfReadError가 발생해야 한다")
+    except PdfReadError:
+        pass
 
 
 if __name__ == "__main__":
