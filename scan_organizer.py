@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import configparser
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -81,3 +82,80 @@ def read_first_page(path: Path) -> str:
         raise
     except Exception as e:
         raise PdfReadError(f"{type(e).__name__}: {e}") from e
+
+
+FORBIDDEN = r'\/:*?"<>|'
+TEXT_PREVIEW = 200  # 미인식 사유에 남길 추출 텍스트 길이
+
+
+def sanitize(name: str) -> str:
+    """Windows 파일명에 쓸 수 없는 문자를 -로 바꾼다.
+
+    결의번호 형식상 발생 가능성은 낮으나 방어적으로 적용한다.
+    """
+    for ch in FORBIDDEN:
+        name = name.replace(ch, "-")
+    return name
+
+
+@dataclass
+class RenamePlan:
+    """파일 한 건의 처리 계획. 아직 아무것도 실행되지 않은 상태."""
+
+    path: Path          # 원본 경로
+    mtime: float        # 파일 수정 시각 (정렬 기준 = 스캔된 순서)
+    number: str | None  # 인식된 결의번호
+    new_name: str | None  # 바꿀 파일명. 미인식이면 None
+    status: str         # "정상" | "중복" | "미인식"
+    reason: str         # 미인식 사유 또는 중복 안내
+
+
+def plan_renames(paths: list[Path], patterns: list[re.Pattern]) -> list[RenamePlan]:
+    """파일 목록을 받아 이름 변경 계획을 세운다. 파일은 건드리지 않는다.
+
+    수정 시각 오름차순(= 스캔된 순서)으로 정렬한 뒤, 각 PDF의 첫 페이지에서
+    결의번호를 찾는다. 정렬은 표시·처리 순서에만 영향을 주며, 파일명은
+    각 문서 안에 적힌 번호에서 나온다.
+
+    개별 파일의 오류는 그 파일만 "미인식"으로 처리하고 나머지는 계속한다.
+    """
+    대상 = sorted(paths, key=lambda p: p.stat().st_mtime)
+
+    # 이미 쓰이고 있는 이름들. 이번에 이름을 바꿀 파일 자신은 제외해야
+    # 자기 자신과 충돌한 것으로 오해하지 않는다.
+    처리중 = {p.name for p in 대상}
+    사용중: set[str] = set()
+    for p in 대상:
+        for 기존 in p.parent.iterdir():
+            if 기존.name not in 처리중:
+                사용중.add(기존.name)
+
+    계획: list[RenamePlan] = []
+    for p in 대상:
+        mtime = p.stat().st_mtime
+        try:
+            텍스트 = read_first_page(p)
+        except PdfReadError as e:
+            계획.append(RenamePlan(p, mtime, None, None, "미인식", f"PDF 읽기 오류 - {e}"))
+            continue
+
+        번호 = extract_number(텍스트, patterns)
+        if 번호 is None:
+            미리보기 = normalize(텍스트)[:TEXT_PREVIEW]
+            사유 = "텍스트 없음" if not 미리보기 else f"결의번호 미인식 | 추출텍스트: {미리보기}"
+            계획.append(RenamePlan(p, mtime, None, None, "미인식", 사유))
+            continue
+
+        기본 = sanitize(번호)
+        후보 = f"{기본}.pdf"
+        n = 1
+        while 후보 in 사용중:
+            n += 1
+            후보 = f"{기본}_{n}.pdf"
+        사용중.add(후보)
+
+        상태 = "정상" if n == 1 else "중복"
+        사유 = "" if n == 1 else f"같은 번호가 이미 있어 _{n} 부여"
+        계획.append(RenamePlan(p, mtime, 번호, 후보, 상태, 사유))
+
+    return 계획
