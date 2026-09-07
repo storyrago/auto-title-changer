@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -159,3 +160,66 @@ def plan_renames(paths: list[Path], patterns: list[re.Pattern]) -> list[RenamePl
         계획.append(RenamePlan(p, mtime, 번호, 후보, 상태, 사유))
 
     return 계획
+
+
+LOG_NAME = "정리기록.log"
+
+
+@dataclass
+class RenameResult:
+    """실행 결과 한 건."""
+
+    plan: RenamePlan
+    ok: bool
+    message: str
+
+
+def apply_renames(plans: list[RenamePlan], log_path: Path | None = None) -> list[RenameResult]:
+    """계획대로 이름을 바꾸고 로그를 남긴다.
+
+    미인식 건은 손대지 않고 실패로 기록한다. 개별 파일의 실패가 나머지
+    처리를 막지 않는다. 파일을 삭제하거나 이동하지 않는다.
+
+    log_path를 주지 않으면 첫 파일과 같은 폴더에 정리기록.log를 만든다.
+    """
+    if not plans:
+        return []
+
+    if log_path is None:
+        log_path = plans[0].path.parent / LOG_NAME
+
+    결과: list[RenameResult] = []
+    줄들: list[str] = []
+    시각 = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for c in plans:
+        if c.new_name is None:
+            결과.append(RenameResult(c, False, c.reason))
+            줄들.append(f"{시각}  실패  {c.path.name}  (사유: {c.reason})")
+            continue
+
+        대상 = c.path.parent / c.new_name
+        if 대상 == c.path:
+            결과.append(RenameResult(c, True, "이미 올바른 이름"))
+            줄들.append(f"{시각}  성공  {c.path.name}  ->  {c.new_name}  (변경 없음)")
+            continue
+
+        try:
+            c.path.rename(대상)
+        except OSError as e:
+            사유 = f"이름 변경 실패 - {type(e).__name__}: {e}"
+            결과.append(RenameResult(c, False, 사유))
+            줄들.append(f"{시각}  실패  {c.path.name}  (사유: {사유})")
+            continue
+
+        꼬리 = f"  ({c.reason})" if c.reason else ""
+        결과.append(RenameResult(c, True, ""))
+        줄들.append(f"{시각}  성공  {c.path.name}  ->  {c.new_name}{꼬리}")
+
+    try:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write("\n".join(줄들) + "\n")
+    except OSError:
+        pass  # 로그를 못 써도 이름 변경 결과는 유지한다
+
+    return 결과

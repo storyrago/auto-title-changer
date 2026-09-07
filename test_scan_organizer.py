@@ -4,7 +4,10 @@ import tempfile
 from pathlib import Path
 
 from scan_organizer import (
+    LOG_NAME,
     PdfReadError,
+    RenameResult,
+    apply_renames,
     extract_number,
     load_patterns,
     RenamePlan,
@@ -216,6 +219,118 @@ def test_읽기_실패는_미인식():
 
 def test_sanitize_금지문자():
     assert sanitize('a/b:c*d?e"f<g>h|i\\j') == "a-b-c-d-e-f-g-h-i-j"
+
+
+def test_실행하면_이름이_바뀐다():
+    폴더 = Path(tempfile.mkdtemp())
+    항목 = [
+        ("Scan_0001.pdf", "결의번호 : 20260315-0000005"),
+        ("Scan_0002.pdf", "결의번호 : 20260414-0001"),
+    ]
+    경로들 = _가짜_pdf들(폴더, 항목)
+    원본 = _텍스트_주입(dict(항목))
+    try:
+        계획 = plan_renames(경로들, P)
+    finally:
+        _텍스트_복원(원본)
+
+    결과 = apply_renames(계획)
+
+    assert all(r.ok for r in 결과)
+    남은것 = sorted(f.name for f in 폴더.iterdir() if f.suffix == ".pdf")
+    assert 남은것 == ["20260315-0000005.pdf", "20260414-0001.pdf"]
+
+
+def test_미인식은_손대지_않는다():
+    폴더 = Path(tempfile.mkdtemp())
+    항목 = [("Scan_0001.pdf", "번호가 없는 문서")]
+    경로들 = _가짜_pdf들(폴더, 항목)
+    원본 = _텍스트_주입(dict(항목))
+    try:
+        계획 = plan_renames(경로들, P)
+    finally:
+        _텍스트_복원(원본)
+
+    결과 = apply_renames(계획)
+
+    assert 결과[0].ok is False
+    assert (폴더 / "Scan_0001.pdf").exists(), "원본이 그대로 남아야 한다"
+
+
+def test_이미_올바른_이름은_건너뛴다():
+    폴더 = Path(tempfile.mkdtemp())
+    항목 = [("20260315-0000005.pdf", "결의번호 : 20260315-0000005")]
+    경로들 = _가짜_pdf들(폴더, 항목)
+    원본 = _텍스트_주입(dict(항목))
+    try:
+        계획 = plan_renames(경로들, P)
+    finally:
+        _텍스트_복원(원본)
+
+    결과 = apply_renames(계획)
+
+    assert 결과[0].ok is True
+    assert (폴더 / "20260315-0000005.pdf").exists()
+
+
+def test_한_건_실패해도_나머지는_처리된다():
+    폴더 = Path(tempfile.mkdtemp())
+    항목 = [
+        ("Scan_0001.pdf", "결의번호 : 20260315-0000005"),
+        ("Scan_0002.pdf", "결의번호 : 20260414-0001"),
+    ]
+    경로들 = _가짜_pdf들(폴더, 항목)
+    원본 = _텍스트_주입(dict(항목))
+    try:
+        계획 = plan_renames(경로들, P)
+    finally:
+        _텍스트_복원(원본)
+
+    # 첫 건의 원본을 미리 지워 rename이 실패하게 만든다
+    계획[0].path.unlink()
+
+    결과 = apply_renames(계획)
+
+    assert 결과[0].ok is False
+    assert 결과[1].ok is True, "앞 건이 실패해도 뒤 건은 처리되어야 한다"
+    assert (폴더 / "20260414-0001.pdf").exists()
+
+
+def test_로그가_기록된다():
+    폴더 = Path(tempfile.mkdtemp())
+    항목 = [
+        ("Scan_0001.pdf", "결의번호 : 20260315-0000005"),
+        ("Scan_0002.pdf", "번호가 없는 문서"),
+    ]
+    경로들 = _가짜_pdf들(폴더, 항목)
+    원본 = _텍스트_주입(dict(항목))
+    try:
+        계획 = plan_renames(경로들, P)
+    finally:
+        _텍스트_복원(원본)
+
+    apply_renames(계획)
+
+    로그 = (폴더 / LOG_NAME).read_text(encoding="utf-8")
+    assert "성공" in 로그 and "20260315-0000005.pdf" in 로그
+    assert "실패" in 로그 and "Scan_0002.pdf" in 로그
+
+
+def test_로그는_이어붙는다():
+    폴더 = Path(tempfile.mkdtemp())
+    for 회차 in range(2):
+        이름 = f"Scan_{회차}.pdf"
+        항목 = [(이름, f"결의번호 : 2026031{회차}-0000005")]
+        경로들 = _가짜_pdf들(폴더, 항목)
+        원본 = _텍스트_주입(dict(항목))
+        try:
+            계획 = plan_renames([경로들[0]], P)
+        finally:
+            _텍스트_복원(원본)
+        apply_renames(계획)
+
+    줄수 = len((폴더 / LOG_NAME).read_text(encoding="utf-8").strip().splitlines())
+    assert 줄수 == 2, f"두 번 실행하면 2줄이어야 하는데 {줄수}줄"
 
 
 if __name__ == "__main__":
