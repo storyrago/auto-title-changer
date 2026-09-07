@@ -223,3 +223,122 @@ def apply_renames(plans: list[RenamePlan], log_path: Path | None = None) -> list
         pass  # 로그를 못 써도 이름 변경 결과는 유지한다
 
     return 결과
+
+
+# ---------------------------------------------------------------- 화면
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+APP_TITLE = "스캔 결의서 파일명 변경"
+COLUMNS = ("수정시각", "원본", "인식된 번호", "새 이름", "상태")
+
+
+class App(tk.Tk):
+    """파일 선택 → 결과 확인 → 이름 변경 실행 순서로 진행하는 창."""
+
+    def __init__(self):
+        super().__init__()
+        self.title(APP_TITLE)
+        self.geometry("980x520")
+        self.plans: list[RenamePlan] = []
+
+        상단 = tk.Frame(self, padx=10, pady=8)
+        상단.pack(fill="x")
+
+        self.btn_select = tk.Button(상단, text="파일 선택", width=14, command=self.on_select)
+        self.btn_select.pack(side="left")
+
+        self.btn_apply = tk.Button(
+            상단, text="이름 변경 실행", width=16, state="disabled", command=self.on_apply
+        )
+        self.btn_apply.pack(side="left", padx=(8, 0))
+
+        self.lbl_status = tk.Label(상단, text="PDF 파일을 선택하세요.", anchor="w")
+        self.lbl_status.pack(side="left", padx=(16, 0))
+
+        self.tree = ttk.Treeview(self, columns=COLUMNS, show="headings")
+        for 열, 폭 in zip(COLUMNS, (140, 220, 190, 230, 90)):
+            self.tree.heading(열, text=열)
+            self.tree.column(열, width=폭, anchor="w")
+        self.tree.tag_configure("미인식", foreground="#c00000")
+        self.tree.tag_configure("중복", foreground="#b06000")
+
+        스크롤 = ttk.Scrollbar(self, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=스크롤.set)
+        self.tree.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+        스크롤.pack(side="right", fill="y", padx=(0, 10), pady=(0, 10))
+
+        try:
+            self.patterns = load_patterns(Path(__file__).parent / "config.ini")
+        except ValueError as e:
+            messagebox.showerror("설정 오류", f"{e}\n\n기본 규칙으로 실행합니다.")
+            self.patterns = load_patterns(None)
+
+    def on_select(self):
+        """PDF를 고르고 계획을 세워 목록에 표시한다. 파일은 아직 바뀌지 않는다."""
+        선택 = filedialog.askopenfilenames(
+            title="이름을 바꿀 PDF를 선택하세요", filetypes=[("PDF 파일", "*.pdf")]
+        )
+        if not 선택:
+            return
+
+        경로들 = [Path(s) for s in 선택 if Path(s).suffix.lower() == ".pdf"]
+        if not 경로들:
+            messagebox.showinfo(APP_TITLE, "선택된 PDF가 없습니다.")
+            return
+
+        self.config(cursor="watch")
+        self.update()
+        try:
+            self.plans = plan_renames(경로들, self.patterns)
+        finally:
+            self.config(cursor="")
+
+        self.tree.delete(*self.tree.get_children())
+        for c in self.plans:
+            시각 = datetime.fromtimestamp(c.mtime).strftime("%Y-%m-%d %H:%M")
+            self.tree.insert(
+                "",
+                "end",
+                values=(시각, c.path.name, c.number or "(없음)", c.new_name or "—", c.status),
+                tags=(c.status,),
+            )
+
+        바꿀것 = sum(1 for c in self.plans if c.new_name)
+        미인식 = len(self.plans) - 바꿀것
+        self.lbl_status.config(
+            text=f"총 {len(self.plans)}건 · 변경 대상 {바꿀것}건 · 미인식 {미인식}건"
+            + ("  (미인식 파일은 그대로 둡니다)" if 미인식 else "")
+        )
+        self.btn_apply.config(state="normal" if 바꿀것 else "disabled")
+
+    def on_apply(self):
+        """확인을 받은 뒤 실제로 이름을 바꾼다."""
+        바꿀것 = sum(1 for c in self.plans if c.new_name)
+        if not messagebox.askyesno(APP_TITLE, f"{바꿀것}건의 파일명을 변경합니다. 진행할까요?"):
+            return
+
+        결과 = apply_renames(self.plans)
+        성공 = sum(1 for r in 결과 if r.ok)
+        실패 = len(결과) - 성공
+        로그 = self.plans[0].path.parent / LOG_NAME
+
+        messagebox.showinfo(
+            APP_TITLE,
+            f"완료되었습니다.\n\n성공 {성공}건\n미변경·실패 {실패}건\n\n기록: {로그}",
+        )
+
+        self.tree.delete(*self.tree.get_children())
+        self.plans = []
+        self.btn_apply.config(state="disabled")
+        self.lbl_status.config(text=f"완료: 성공 {성공}건, 미변경·실패 {실패}건")
+
+
+def main() -> None:
+    """프로그램 진입점."""
+    App().mainloop()
+
+
+if __name__ == "__main__":
+    main()
